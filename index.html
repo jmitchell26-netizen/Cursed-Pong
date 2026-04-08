@@ -1,35 +1,45 @@
 <!DOCTYPE html>
+<!-- Cursed Pong: single-file game. Simulation runs on canvas; "curse" visuals (shake, spin) are CSS on the DOM. -->
 <html lang="en">
 <head>
+  <!-- UTF-8 required for em dashes / special chars in help text -->
   <meta charset="UTF-8" />
+  <!-- Mobile: prevents horizontal overflow; scale handled by .viewport-fit -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Cursed Pong</title>
+  <!-- All presentation below; game simulation is canvas + script only -->
   <style>
+    /* ---- Box model: padding/border included in width/height ---- */
     * {
       box-sizing: border-box;
     }
 
+    /* ---- Theme tokens (neon terminal palette + shake amplitude set from JS) ---- */
     :root {
-      --neon: #39ff14;
-      --neon-dim: #1a8f0a;
-      --bg: #060806;
-      --crt-green: rgba(57, 255, 20, 0.03);
-      --shake-int: 4px;
+      --neon: #39ff14; /* primary phosphor green (HUD, borders, canvas stroke) */
+      --neon-dim: #1a8f0a; /* muted green (inactive buttons, labels) */
+      --bg: #060806; /* near-black fallback */
+      --crt-green: rgba(57, 255, 20, 0.03); /* reserved for subtle tints (optional) */
+      --shake-int: 4px; /* px amplitude for #game.shake-on keyframes; updated in JS */
     }
 
+    /* Root element: fallback color behind body gradients */
     html {
       min-height: 100%;
       background: #020302;
     }
 
+    /* Page layout: stacked flex column; phosphor-style layered backgrounds */
     body {
       margin: 0;
       min-height: 100vh;
+      /* Layered: top green haze → bottom vignette → vertical sweep (CRT room feel) */
       background:
         radial-gradient(ellipse 120% 100% at 50% 20%, rgba(30, 55, 28, 0.35) 0%, transparent 55%),
         radial-gradient(ellipse 80% 60% at 50% 100%, rgba(0, 0, 0, 0.9) 0%, transparent 50%),
         linear-gradient(180deg, #0c100c 0%, #050705 45%, #020302 100%);
       color: var(--neon);
+      /* Monospace stack: native UI font first for crisp glyphs */
       font-family:
         ui-monospace,
         "Cascadia Code",
@@ -44,16 +54,18 @@
       justify-content: flex-start;
       padding: 1rem;
       box-sizing: border-box;
-      overflow-x: hidden;
+      overflow-x: hidden; /* no horizontal scrollbar when scaled UI is wide */
       position: relative;
     }
 
+    /* Full-screen CRT layer: vignette + horizontal scanlines + faint vertical tint (pointer-events none) */
     .crt-overlay {
-      pointer-events: none;
+      pointer-events: none; /* clicks pass through to buttons and canvas */
       position: fixed;
       inset: 0;
-      z-index: 9999;
+      z-index: 9999; /* above all page content; below browser chrome */
       opacity: 0.92;
+      /* Stack order: back = edge darkening, mid = scanlines, front = vertical RGB-ish banding */
       background:
         radial-gradient(
           ellipse 70% 58% at 50% 45%,
@@ -76,6 +88,7 @@
         );
     }
 
+    /* Soft green bloom at center (screen-style phosphor) */
     .crt-overlay::after {
       content: "";
       position: absolute;
@@ -88,6 +101,7 @@
       pointer-events: none;
     }
 
+    /* Tone down overlay for users who prefer reduced motion */
     @media (prefers-reduced-motion: reduce) {
       .crt-overlay {
         opacity: 0.55;
@@ -98,11 +112,12 @@
       }
     }
 
+    /* Flex region that holds the scaled game; grows to fill space below HUD */
     .viewport-pad {
       position: relative;
-      z-index: 1;
-      flex: 1 1 auto;
-      min-height: 0;
+      z-index: 1; /* above body background, below .crt-overlay */
+      flex: 1 1 auto; /* eat remaining column height so game centers vertically */
+      min-height: 0; /* allow flex child to shrink inside min-height:100vh body */
       width: 100%;
       max-width: 100%;
       display: flex;
@@ -111,16 +126,18 @@
       padding: 0.25rem;
     }
 
+    /* Scales entire playfield (--fit-scale from JS) so rotated/shaken view stays on-screen */
     .viewport-fit {
       transform: scale(var(--fit-scale, 1));
       transform-origin: center center;
     }
 
+    /* Top bar: bounce count + scores */
     .hud {
       position: relative;
       z-index: 1;
       width: 100%;
-      max-width: 800px;
+      max-width: 800px; /* align with mode bars + logical game width */
       flex-shrink: 0;
       display: flex;
       justify-content: space-between;
@@ -128,7 +145,8 @@
       margin-bottom: 0.75rem;
       padding: 0.65rem 0.85rem;
       font-size: 14px;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.08em; /* slight terminal spacing */
+      /* Dual text-shadow: outer glow + thin highlight */
       text-shadow:
         0 0 6px rgba(57, 255, 20, 0.45),
         0 0 1px rgba(180, 255, 160, 0.35);
@@ -140,6 +158,7 @@
     }
 
     .hud__bounce {
+      /* Primary curse statistic */
       font-size: 18px;
       font-weight: bold;
     }
@@ -150,10 +169,12 @@
     }
 
     .hud__scores {
+      /* P1 / P2 score columns */
       display: flex;
       gap: 2rem;
     }
 
+    /* Rows for MODE and DIFFICULTY toggle buttons */
     .mode-bar {
       position: relative;
       z-index: 1;
@@ -174,11 +195,13 @@
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
 
+    /* Muted label before each button group */
     .mode-bar__label {
       color: var(--neon-dim);
       margin-right: 0.25rem;
     }
 
+    /* Terminal-style toggles; .mode-btn--active = current setting */
     .mode-btn {
       font-family: inherit;
       font-size: 12px;
@@ -198,11 +221,13 @@
     }
 
     .mode-btn:hover {
+      /* Brighter border on hover */
       color: var(--neon);
       border-color: var(--neon);
     }
 
     .mode-btn:focus-visible {
+      /* Keyboard focus ring for accessibility */
       outline: none;
       border-color: var(--neon);
       box-shadow:
@@ -211,10 +236,11 @@
     }
 
     .mode-btn:active {
-      transform: translateY(1px);
+      transform: translateY(1px); /* tactile “press into bezel” */
     }
 
     .mode-btn.mode-btn--active {
+      /* Stronger fill + glow so selection is obvious at a glance */
       color: var(--neon);
       border-color: var(--neon);
       background: #0a1a0a;
@@ -224,6 +250,7 @@
       text-shadow: 0 0 8px rgba(57, 255, 20, 0.6);
     }
 
+    /* Outer "monitor bezel" around the canvas; inner size 800×450 after padding */
     .viewport {
       box-sizing: border-box;
       width: 820px;
@@ -231,9 +258,11 @@
       position: relative;
       transform-origin: center center;
       border-radius: 8px;
-      padding: 10px;
+      padding: 10px; /* 820×470 outer box → 800×450 inner for #game */
+      /* Plastic bezel gradient (top-left highlight → bottom shadow) */
       background:
         linear-gradient(165deg, rgba(35, 38, 35, 0.95) 0%, rgba(12, 14, 12, 1) 40%, rgba(6, 8, 6, 1) 100%);
+      /* Shadows: inner glass highlight, inner cavity, thin rim, thick frame, green accent, drop shadow, outer glow */
       box-shadow:
         inset 0 2px 4px rgba(255, 255, 255, 0.06),
         inset 0 -3px 12px rgba(0, 0, 0, 0.65),
@@ -244,12 +273,14 @@
         0 0 60px rgba(57, 255, 20, 0.08);
     }
 
+    /* Added at ≥10 bounces: whole viewport rotates (curse); duration set in JS */
     .viewport--rotate {
       animation-name: curse-spin;
       animation-timing-function: linear;
       animation-iteration-count: infinite;
     }
 
+    /* Continuous 360° rotation for curse phase */
     @keyframes curse-spin {
       from {
         transform: rotate(0deg);
@@ -259,23 +290,26 @@
       }
     }
 
+    /* Canvas: playfield; filter simulates phosphor; no CSS transform on physics */
     #game {
       display: block;
       width: 100%;
       height: 100%;
-      border-radius: 3px;
-      background: #000;
+      border-radius: 3px; /* slightly softer than outer .viewport */
+      background: #000; /* playfield cleared in JS each frame; this shows if script fails */
       border: 1px solid rgba(57, 255, 20, 0.55);
+      /* Outer glow + deep vignette + green phosphor spill toward center */
       box-shadow:
         0 0 24px rgba(57, 255, 20, 0.22),
         inset 0 0 50px rgba(0, 0, 0, 0.88),
         inset 0 0 120px rgba(20, 45, 18, 0.12);
-      image-rendering: pixelated;
+      image-rendering: pixelated; /* keep chunky look when scaled */
       image-rendering: crisp-edges;
-      transform-origin: center center;
-      filter: contrast(1.06) brightness(1.04) saturate(1.08);
+      transform-origin: center center; /* shake/scale animations anchor here */
+      filter: contrast(1.06) brightness(1.04) saturate(1.08); /* CRT punch without editing pixels in JS */
     }
 
+    /* ≥5 bounces: violent shake animation (visual only; --shake-int from JS) */
     #game.shake-on {
       animation-name: curse-shake;
       animation-duration: 0.072s;
@@ -284,11 +318,18 @@
       will-change: transform;
     }
 
+    /*
+     * Shake keyframes: mix translate + rotate + slight scale.
+     * Amplitude scales with var(--shake-int) set from totalBounces in updateCurseVisuals().
+     */
     @keyframes curse-shake {
+      /* 16 steps per cycle (~0.072s): chaotic motion; amplitude from --shake-int */
       0% {
         transform: translate(0, 0) rotate(0deg) scale(1);
       }
+      /* First quarter of cycle */
       6.25% {
+        /* Keyframe steps 2–15: pseudo-random offsets (see block comment above) */
         transform: translate(calc(var(--shake-int) * 0.55), calc(var(--shake-int) * -0.5))
           rotate(2deg) scale(1.004);
       }
@@ -317,6 +358,7 @@
           rotate(2.2deg) scale(0.998);
       }
       50% {
+        /* Mid-cycle */
         transform: translate(calc(var(--shake-int) * 0.5), calc(var(--shake-int) * 0.1))
           rotate(-2deg) scale(1.007);
       }
@@ -333,6 +375,7 @@
           rotate(2.1deg) scale(1.002);
       }
       75% {
+        /* Three-quarter cycle */
         transform: translate(calc(var(--shake-int) * 0.4), calc(var(--shake-int) * 0.52))
           rotate(-2.3deg) scale(0.996);
       }
@@ -349,10 +392,12 @@
           rotate(1.7deg) scale(1.005);
       }
       100% {
+        /* Loop seam: return to neutral so animation can repeat smoothly */
         transform: translate(0, 0) rotate(0deg) scale(1);
       }
     }
 
+    /* Footer instructions (filled by updateHelpText()) */
     .help {
       position: relative;
       z-index: 1;
@@ -369,6 +414,7 @@
       text-shadow: 0 0 4px rgba(57, 255, 20, 0.2);
     }
 
+    /* Key cap styling inside help text */
     .help kbd {
       border: 1px solid rgba(57, 255, 20, 0.35);
       background: rgba(0, 0, 0, 0.35);
@@ -378,47 +424,74 @@
     }
 
   </style>
+  <!-- UI sits under .crt-overlay (fixed); interactive elements use z-index 1 in CSS -->
 </head>
 <body>
+  <!-- CRT scanlines + vignette; does not block clicks -->
   <div class="crt-overlay" aria-hidden="true"></div>
+  <!-- Score + bounce counter (curse meter) -->
   <div class="hud">
+    <!-- totalBounces: wall + paddle + barrier; resets on goal; drives curse tiers in JS -->
     <div class="hud__bounce">BOUNCE COUNT: <span id="bounceDisplay">0</span></div>
     <div class="hud__scores">
       <span>P1: <span id="scoreP1">0</span></span>
+      <!-- scoreP1: goals on the right edge; scoreP2: goals on the left edge -->
       <span>P2: <span id="scoreP2">0</span></span>
     </div>
   </div>
+  <!-- 1P vs 2P: toggles whether P2 is AI -->
   <div class="mode-bar" role="group" aria-label="Player mode">
     <span class="mode-bar__label">MODE</span>
+    <!-- false → setPlayerMode(false): P2 is AI -->
     <button type="button" class="mode-btn mode-btn--active" id="mode1p" aria-pressed="true">
       1 PLAYER
     </button>
+    <!-- true → human P2 uses arrow keys -->
     <button type="button" class="mode-btn" id="mode2p" aria-pressed="false">2 PLAYERS</button>
   </div>
+  <!-- Ball speed (all modes) + CPU strength (1P only) -->
   <div class="mode-bar" role="group" aria-label="Difficulty">
     <span class="mode-bar__label">DIFFICULTY</span>
     <button type="button" class="mode-btn" id="diffEasy" aria-pressed="false">EASY</button>
+    <!-- Default: medium ball speed + default AI speed -->
     <button type="button" class="mode-btn mode-btn--active" id="diffMedium" aria-pressed="true">
       MEDIUM
     </button>
+    <!-- Hard: faster ball + faster AI + trajectory prediction for CPU -->
     <button type="button" class="mode-btn" id="diffHard" aria-pressed="false">HARD</button>
   </div>
+  <!-- viewportOuter: measured for fit-scale; viewportFit: CSS scale; viewport: rotation target -->
   <div class="viewport-pad" id="viewportOuter">
     <div class="viewport-fit" id="viewportFit">
       <div class="viewport" id="viewport">
+        <!-- Internal resolution 800×450; scaled by .viewport-fit for responsive CRT bezel -->
         <canvas id="game" width="800" height="450"></canvas>
       </div>
     </div>
   </div>
+  <!-- Keyboard / feature summary (innerHTML from JS) -->
   <p class="help" id="helpText"></p>
 
   <script>
+    /*
+     * Game logic: requestAnimationFrame loop, fixed-timestep-ish dt cap.
+     * Coordinates are canvas pixels (W×H). Curse UI reads totalBounces but physics do not.
+     *
+     * Order of operations per frame (tick):
+     *   1) Move paddles from input / AI
+     *   2) Integrate all balls + top/bottom walls
+     *   3) Barrier collisions (may remove barrier, bump curse count)
+     *   4) Paddle hits (P1 then P2 passes; may spawn balls/barriers)
+     *   5) Goal detection → score, reset balls, clear barriers
+     *   6) Draw world
+     */
     (function () {
+      /* ---------- DOM references (queried once at startup) ---------- */
       const canvas = document.getElementById("game");
-      const ctx = canvas.getContext("2d");
-      const viewportOuter = document.getElementById("viewportOuter");
-      const viewportFit = document.getElementById("viewportFit");
-      const viewport = document.getElementById("viewport");
+      const ctx = canvas.getContext("2d"); /* "2d" API: fillRect, arc, stroke — no WebGL */
+      const viewportOuter = document.getElementById("viewportOuter"); /* sized for updateFitScale() */
+      const viewportFit = document.getElementById("viewportFit"); /* receives CSS --fit-scale */
+      const viewport = document.getElementById("viewport"); /* curse-spin + bezel; not the canvas */
       const bounceDisplay = document.getElementById("bounceDisplay");
       const scoreP1El = document.getElementById("scoreP1");
       const scoreP2El = document.getElementById("scoreP2");
@@ -429,42 +502,50 @@
       const diffHardBtn = document.getElementById("diffHard");
       const helpTextEl = document.getElementById("helpText");
 
+      /* Canvas logical size (matches width/height attributes) */
       const W = canvas.width;
       const H = canvas.height;
+      /* Geometry (px): paddles are AABBs; ball is a circle radius BALL_R */
       const PADDLE_W = 14;
       const PADDLE_H = 100;
       const BALL_R = 8;
-      const PADDLE_SPEED = 420;
-      const BALL_SPEED_REF = 320;
+      const PADDLE_SPEED = 420; /* px/s for human paddles (both players) */
+      const BALL_SPEED_REF = 320; /* base px/s before difficulty multiplier */
 
-      let difficulty = "medium";
+      let difficulty = "medium"; /* "easy" | "medium" | "hard" — also used by getBallSpeed / getAISpeed */
 
-      const BARRIER_SPAWN_CHANCE = 0.34;
-      const BARRIER_MAX_MS = 9500;
-      const BARRIER_THICK = 10;
-      let barriers = [];
+      /* ---------- Cursed barriers (vertical segments in canvas space) ---------- */
+      const BARRIER_SPAWN_CHANCE = 0.34; /* probability on each paddle hit (maybeSpawnBarrier) */
+      const BARRIER_MAX_MS = 9500; /* barriers expire if unused (tickBarriers filter) */
+      const BARRIER_THICK = 10; /* wall thickness in px (AABB width) */
+      let barriers = []; /* { left, top, width, height, side, born } */
 
+      /* Multi-ball curse: cap to avoid runaway CPU */
       const MAX_BALLS = 12;
-      let balls = [];
-      let paddleHitCount = 0;
+      let balls = []; /* each: { x, y, vx, vy } in canvas pixels */
+      let paddleHitCount = 0; /* every 2 paddle hits spawns another ball */
 
-      let scoreP1 = 0;
-      let scoreP2 = 0;
-      let totalBounces = 0;
+      let scoreP1 = 0; /* increments when ball exits right edge */
+      let scoreP2 = 0; /* increments when ball exits left edge */
+      let totalBounces = 0; /* drives curse; resets on point scored */
 
+      /* Paddle top Y (left paddle x fixed at 24; right at W - 24 - PADDLE_W in tick) */
       let p1Y = H / 2 - PADDLE_H / 2;
       let p2Y = H / 2 - PADDLE_H / 2;
 
+      /** Ball speed in px/s from difficulty (used for serve, cap, extra balls). */
       function getBallSpeed() {
-        if (difficulty === "easy") return BALL_SPEED_REF * 0.78;
-        if (difficulty === "hard") return BALL_SPEED_REF * 1.34;
-        return BALL_SPEED_REF;
+        if (difficulty === "easy") return BALL_SPEED_REF * 0.78; /* slower rally */
+        if (difficulty === "hard") return BALL_SPEED_REF * 1.34; /* faster ball (1P and 2P) */
+        return BALL_SPEED_REF; /* medium = reference speed */
       }
 
+      /** Max speed after paddle hits (prevents infinite acceleration). */
       function ballSpeedCap() {
         return getBallSpeed() * 1.85;
       }
 
+      /** Right paddle AI move speed when p2AI; 0 in 2P human mode. */
       function getAISpeed() {
         if (!p2AI) return 0;
         if (difficulty === "easy") return 248;
@@ -472,13 +553,15 @@
         return 340;
       }
 
+      /** Which ball the CPU should track: right-moving ball closest to right paddle. */
       function pickBallIndexForAI() {
-        const p2x = W - 24 - PADDLE_W;
+        const p2x = W - 24 - PADDLE_W; /* right paddle left edge x */
         let best = -1;
         let bestDist = Infinity;
         for (let i = 0; i < balls.length; i++) {
           const b = balls[i];
           if (b.vx > 0) {
+            /* Only balls moving toward P2; pick the one closest to impact */
             const d = p2x - b.x;
             if (d >= 0 && d < bestDist) {
               bestDist = d;
@@ -486,30 +569,37 @@
             }
           }
         }
-        return best >= 0 ? best : 0;
+        return best >= 0 ? best : 0; /* fallback index 0 if no ball approaching */
       }
 
+      /**
+       * Target Y for right paddle center. Easy/medium: track ball Y.
+       * Hard: simulate trajectory to paddle plane including wall bounces.
+       */
       function computeP2TargetY() {
         const p2x = W - 24 - PADDLE_W;
-        const hitX = p2x - BALL_R;
+        const hitX = p2x - BALL_R; /* ball center x when touching paddle plane */
         const bi = pickBallIndexForAI();
         const ball = balls[bi];
         if (!ball) return p2Y;
+        /* Track ball’s current Y with paddle center aligned to ball (simple AI) */
         const naive = clamp(ball.y - PADDLE_H / 2, 0, H - PADDLE_H);
         if (difficulty !== "hard" || !p2AI || ball.vx <= 0) {
-          return naive;
+          return naive; /* easy/medium, or ball not moving toward P2: no prediction */
         }
         let x = ball.x;
         let y = ball.y;
         let vx = ball.vx;
         let vy = ball.vy;
         const dt = 1 / 240;
+        /* Integrate trajectory with wall reflections until x reaches the right paddle plane */
         for (let i = 0; i < 8000; i++) {
           if (x >= hitX) {
             return clamp(y - PADDLE_H / 2, 0, H - PADDLE_H);
           }
           const nx = x + vx * dt;
           if (nx >= hitX) {
+            /* Sub-step to exact paddle plane so Y is accurate */
             const t = (hitX - x) / vx;
             y += vy * t;
             return clamp(y - PADDLE_H / 2, 0, H - PADDLE_H);
@@ -518,15 +608,16 @@
           y += vy * dt;
           if (y - BALL_R < 0) {
             y = BALL_R;
-            vy = Math.abs(vy);
+            vy = Math.abs(vy); /* top wall bounce */
           } else if (y + BALL_R > H) {
             y = H - BALL_R;
-            vy = -Math.abs(vy);
+            vy = -Math.abs(vy); /* bottom wall bounce */
           }
         }
-        return naive;
+        return naive; /* simulation guard: if loop exhausts, fall back */
       }
 
+      /* Held key state (polled each frame in tick) */
       let p1Up = false;
       let p1Down = false;
       let p2Up = false;
@@ -534,6 +625,7 @@
       let twoPlayers = false;
       let p2AI = true;
 
+      /** Renders help paragraph based on mode + difficulty. */
       function updateHelpText() {
         const diffLabel =
           difficulty === "easy" ? "easy" : difficulty === "hard" ? "hard" : "medium";
@@ -552,10 +644,11 @@
         }
       }
 
+      /** 1P (AI) vs 2P (human P2); resets match state. */
       function setPlayerMode(two) {
         if (twoPlayers === two) return;
         twoPlayers = two;
-        p2AI = !twoPlayers;
+        p2AI = !twoPlayers; /* 1P → AI controls P2; 2P → human */
         p2Up = false;
         p2Down = false;
         mode1pBtn.classList.toggle("mode-btn--active", !twoPlayers);
@@ -564,6 +657,7 @@
         mode2pBtn.setAttribute("aria-pressed", twoPlayers ? "true" : "false");
         updateHelpText();
 
+        /* Full match reset (same pattern as setDifficulty / goal) */
         scoreP1 = 0;
         scoreP2 = 0;
         scoreP1El.textContent = "0";
@@ -577,9 +671,11 @@
         serve();
       }
 
+      /** Easy / medium / hard: ball speed + AI; resets match state. */
       function setDifficulty(next) {
         if (difficulty === next) return;
         difficulty = next;
+        /* Sync button visuals + aria-pressed for screen readers */
         diffEasyBtn.classList.toggle("mode-btn--active", next === "easy");
         diffMediumBtn.classList.toggle("mode-btn--active", next === "medium");
         diffHardBtn.classList.toggle("mode-btn--active", next === "hard");
@@ -601,26 +697,31 @@
         serve();
       }
 
+      /** Clamps v to the inclusive range [lo, hi]. */
       function clamp(v, lo, hi) {
         return Math.max(lo, Math.min(hi, v));
       }
 
+      /** New ball at center with random angle; direction ±1 sets initial horizontal sense. */
       function makeBall(direction) {
+        /* Random launch angle within ±~14° of horizontal so serve is playable */
         const angle = (Math.random() * 0.5 - 0.25) * Math.PI;
         const speed = getBallSpeed();
         return {
           x: W / 2,
           y: H / 2,
-          vx: Math.cos(angle) * speed * direction,
+          vx: Math.cos(angle) * speed * direction, /* direction ±1: left or right serve */
           vy: Math.sin(angle) * speed,
         };
       }
 
+      /** Cursed multi-ball: called every 2 paddle hits until MAX_BALLS. */
       function spawnExtraBall() {
         if (balls.length >= MAX_BALLS) return;
         const angle = (Math.random() * 0.5 - 0.25) * Math.PI;
         const speed = getBallSpeed();
         const dir = Math.random() < 0.5 ? 1 : -1;
+        /* Nudge spawn so multiple balls don’t start perfectly stacked */
         const ox = (Math.random() - 0.5) * 48;
         const oy = (Math.random() - 0.5) * 36;
         balls.push({
@@ -631,26 +732,31 @@
         });
       }
 
+      /** One ball after point scored or mode/difficulty change; resets paddle-hit streak. */
       function serve() {
         balls = [makeBall(Math.random() < 0.5 ? 1 : -1)];
         paddleHitCount = 0;
       }
 
+      /** Maps totalBounces to CSS --shake-int amplitude (≥5 bounces). */
       function shakeTranslatePx() {
         if (totalBounces < 5) return 0;
         return 6 + Math.max(0, totalBounces - 5) * 1.6;
       }
 
+      /** Sets --fit-scale on #viewportFit so playfield + curse visuals stay inside the window. */
       function updateFitScale() {
-        const r = viewportOuter.getBoundingClientRect();
+        const r = viewportOuter.getBoundingClientRect(); /* live layout box */
         const margin = 12;
         const aw = Math.max(0, r.width - margin);
         const ah = Math.max(0, r.height - margin);
         const t = shakeTranslatePx();
+        /* Extra slack for shake rotation so scaled bbox still fits (see shakeTranslatePx) */
         const shakePx = t > 0 ? t * 1.15 + 22 : 0;
         let needW;
         let needH;
         if (viewport.classList.contains("viewport--rotate")) {
+          /* Worst-case AABB of rotated rectangle ≈ diagonal of W×H */
           const span = Math.hypot(W, H) + 2 * shakePx;
           needW = span;
           needH = span;
@@ -659,40 +765,49 @@
           needH = H + 2 * shakePx;
         }
         const s = Math.min(1, aw / needW, ah / needH);
+        /* Floor at 0.05 so something always visible on tiny viewports */
         viewportFit.style.setProperty("--fit-scale", String(Math.max(0.05, s)));
       }
 
+      /**
+       * Syncs HUD bounce count, canvas shake class, viewport rotation, and fit scale.
+       * Thresholds: shake ≥5 bounces, spin ≥10 (ramp duration until 15).
+       */
       function updateCurseVisuals() {
         bounceDisplay.textContent = String(totalBounces);
+        /* --shake-int on :root so @keyframes curse-shake can read it */
         document.documentElement.style.setProperty(
           "--shake-int",
           totalBounces >= 5 ? `${shakeTranslatePx()}px` : "0px"
         );
 
         if (totalBounces >= 5) {
-          canvas.classList.add("shake-on");
+          canvas.classList.add("shake-on"); /* enables curse-shake animation */
         } else {
           canvas.classList.remove("shake-on");
         }
 
         if (totalBounces >= 10) {
-          viewport.classList.add("viewport--rotate");
+          viewport.classList.add("viewport--rotate"); /* enables curse-spin */
           let durSec;
           if (totalBounces < 15) {
+            /* Interpolate spin period from slow (28s) to fast (3s) between bounces 10–14 */
             const t = (totalBounces - 10) / 5;
             durSec = 28 * (1 - t) + 3 * t;
           } else {
-            durSec = 3;
+            durSec = 3; /* bounce 15+: one full rotation every 3s */
           }
           viewport.style.animationDuration = `${durSec}s`;
         } else {
           viewport.classList.remove("viewport--rotate");
           viewport.style.animationDuration = "";
         }
-        updateFitScale();
+        updateFitScale(); /* rotation changes bounding box → rescale */
       }
 
+      /** Circle (ball) vs axis-aligned rectangle overlap test. */
       function ballHitsRect(ball, px, py, pw, ph) {
+        /* Closest point on rect to ball center; compare distance² to BALL_R² */
         const nx = clamp(ball.x, px, px + pw);
         const ny = clamp(ball.y, py, py + ph);
         const dx = ball.x - nx;
@@ -700,6 +815,7 @@
         return dx * dx + dy * dy < BALL_R * BALL_R;
       }
 
+      /** Used when placing a new barrier so it does not spawn on top of a ball. */
       function barrierOverlapsAnyBall(b) {
         for (let i = 0; i < balls.length; i++) {
           if (ballHitsRect(balls[i], b.left, b.top, b.width, b.height)) return true;
@@ -707,10 +823,15 @@
         return false;
       }
 
+      /** Clears all barriers (goal, mode/difficulty change). */
       function clearBarriers() {
         barriers = [];
       }
 
+      /**
+       * Random chance on paddle hit: vertical wall on hitter's half (sign 1=left, -1=right).
+       * Replaces existing barrier on that side.
+       */
       function maybeSpawnBarrier(sideSign) {
         if (Math.random() > BARRIER_SPAWN_CHANCE) return;
         const p1x = 24;
@@ -719,6 +840,7 @@
         const segH = 64 + Math.random() * 76;
         const born = performance.now();
 
+        /** Attempts one random position; returns false if any ball overlaps. */
         function tryPush(left, top, side) {
           const b = {
             left,
@@ -734,6 +856,7 @@
         }
 
         if (sideSign === 1) {
+          /* P1 just hit: wall on left half, between paddle and center */
           barriers = barriers.filter((x) => x.side !== "left");
           const xMin = p1x + PADDLE_W + 32;
           const xMax = mid - 52;
@@ -744,6 +867,7 @@
             if (tryPush(left, y0, "left")) return;
           }
         } else {
+          /* P2 just hit: wall on right half */
           barriers = barriers.filter((x) => x.side !== "right");
           const xMin = mid + 52;
           const xMax = p2x - BARRIER_THICK - 32;
@@ -756,6 +880,7 @@
         }
       }
 
+      /** Ages out barriers; resolves ball vs barrier bounces (horizontal reflect). */
       function tickBarriers(now) {
         barriers = barriers.filter((b) => now - b.born < BARRIER_MAX_MS);
         for (let bi = 0; bi < balls.length; bi++) {
@@ -766,49 +891,58 @@
             const cx = b.left + b.width / 2;
             if (ball.x < cx) {
               ball.x = b.left - BALL_R;
-              ball.vx = -Math.abs(ball.vx);
+              ball.vx = -Math.abs(ball.vx); /* approaching from left → reflect left */
             } else {
               ball.x = b.left + b.width + BALL_R;
-              ball.vx = Math.abs(ball.vx);
+              ball.vx = Math.abs(ball.vx); /* from right → reflect right */
             }
             totalBounces++;
-            barriers.splice(i, 1);
+            barriers.splice(i, 1); /* one-shot wall: disappears after hit */
             updateCurseVisuals();
-            break;
+            break; /* one barrier hit per ball per frame */
           }
         }
       }
 
+      /**
+       * Paddle deflection + speed cap + curse counters + optional barrier spawn.
+       * sign: +1 = P1 hit (ball goes right), -1 = P2 hit (ball goes left).
+       */
       function handlePaddleHit(ballIndex, paddleCenterY, sign) {
         const ball = balls[ballIndex];
         totalBounces++;
+        /* Offset from paddle center adds vertical spin (classic Pong angle) */
         const rel = (ball.y - paddleCenterY) / (PADDLE_H / 2 + BALL_R);
         ball.vy += rel * 180;
-        ball.vx = sign * Math.abs(ball.vx) * 1.03;
+        ball.vx = sign * Math.abs(ball.vx) * 1.03; /* slight speed-up each hit */
         const sp = Math.hypot(ball.vx, ball.vy);
         const cap = ballSpeedCap();
         if (sp > cap) {
           ball.vx *= cap / sp;
-          ball.vy *= cap / sp;
+          ball.vy *= cap / sp; /* scale velocity down uniformly to respect cap */
         }
         paddleHitCount++;
         if (paddleHitCount % 2 === 0) {
-          spawnExtraBall();
+          spawnExtraBall(); /* multi-ball curse */
         }
-        maybeSpawnBarrier(sign);
-        updateCurseVisuals();
+        maybeSpawnBarrier(sign); /* may add wall on hitter’s half */
+        updateCurseVisuals(); /* shake/spin tiers + HUD */
       }
 
       let last = performance.now();
 
+      /** One frame: input → integrate → walls → barriers → paddles → goals → draw. */
       function tick(now) {
+        /* Cap dt at 50ms so tab backgrounding doesn’t explode physics */
         const dt = Math.min((now - last) / 1000, 0.05);
         last = now;
 
+        /* --- Player 1 (left paddle): W / S --- */
         if (p1Up) p1Y -= PADDLE_SPEED * dt;
         if (p1Down) p1Y += PADDLE_SPEED * dt;
         p1Y = clamp(p1Y, 0, H - PADDLE_H);
 
+        /* --- Player 2: AI tracking or arrow keys --- */
         if (p2AI) {
           const target = computeP2TargetY();
           const dy = target - p2Y;
@@ -822,6 +956,7 @@
           p2Y = clamp(p2Y, 0, H - PADDLE_H);
         }
 
+        /* --- Move all balls; top/bottom wall bounces (count toward curse) --- */
         for (let bi = 0; bi < balls.length; bi++) {
           const ball = balls[bi];
           ball.x += ball.vx * dt;
@@ -842,9 +977,11 @@
 
         tickBarriers(now);
 
+        /* Paddle X positions (fixed in canvas space) */
         const p1x = 24;
         const p2x = W - 24 - PADDLE_W;
 
+        /* Only balls that existed before paddle phase (avoids double-processing spawns this frame) */
         const nAfterMove = balls.length;
         for (let bi = 0; bi < nAfterMove; bi++) {
           const ball = balls[bi];
@@ -855,6 +992,7 @@
           }
         }
 
+        /* Includes balls spawned by P1 hits so P2 can react same frame */
         const nAfterP1 = balls.length;
         for (let bi = 0; bi < nAfterP1; bi++) {
           const ball = balls[bi];
@@ -865,6 +1003,7 @@
           }
         }
 
+        /* Any ball crossing left/right edge scores for the opponent */
         let goalLeft = false;
         let goalRight = false;
         for (let bi = 0; bi < balls.length; bi++) {
@@ -880,14 +1019,14 @@
         }
 
         if (goalLeft) {
-          scoreP2++;
+          scoreP2++; /* ball left past P1 */
           scoreP2El.textContent = String(scoreP2);
           totalBounces = 0;
           clearBarriers();
           updateCurseVisuals();
           serve();
         } else if (goalRight) {
-          scoreP1++;
+          scoreP1++; /* ball right past P2 */
           scoreP1El.textContent = String(scoreP1);
           totalBounces = 0;
           clearBarriers();
@@ -895,9 +1034,11 @@
           serve();
         }
 
+        /* --- Draw: clear, center line, barriers, paddles, balls --- */
         ctx.fillStyle = "#000000";
         ctx.fillRect(0, 0, W, H);
 
+        /* Court center line (dashed) */
         ctx.strokeStyle = "rgba(57, 255, 20, 0.25)";
         ctx.setLineDash([8, 12]);
         ctx.beginPath();
@@ -906,6 +1047,7 @@
         ctx.stroke();
         ctx.setLineDash([]);
 
+        /* Cursed barriers (behind paddles in draw order but visually mid-court) */
         ctx.fillStyle = "rgba(57, 255, 20, 0.42)";
         ctx.strokeStyle = "rgba(100, 255, 60, 0.95)";
         ctx.lineWidth = 1;
@@ -918,12 +1060,14 @@
         }
         ctx.shadowBlur = 0;
 
+        /* Paddles: neon fill + glow */
         ctx.fillStyle = "#39ff14";
         ctx.shadowColor = "#39ff14";
         ctx.shadowBlur = 12;
         ctx.fillRect(p1x, p1Y, PADDLE_W, PADDLE_H);
         ctx.fillRect(p2x, p2Y, PADDLE_W, PADDLE_H);
 
+        /* All active balls (multi-ball) */
         for (let bi = 0; bi < balls.length; bi++) {
           const ball = balls[bi];
           ctx.beginPath();
@@ -932,9 +1076,10 @@
         }
         ctx.shadowBlur = 0;
 
-        requestAnimationFrame(tick);
+        requestAnimationFrame(tick); /* next frame */
       }
 
+      /* Keyboard: P1 W/S; P2 arrows (preventDefault stops page scroll) */
       window.addEventListener("keydown", (e) => {
         if (e.code === "KeyW") p1Up = true;
         if (e.code === "KeyS") p1Down = true;
@@ -949,32 +1094,37 @@
       });
 
       window.addEventListener("keyup", (e) => {
+        /* Release movement keys */
         if (e.code === "KeyW") p1Up = false;
         if (e.code === "KeyS") p1Down = false;
         if (e.code === "ArrowUp") p2Up = false;
         if (e.code === "ArrowDown") p2Down = false;
       });
 
+      /* UI: mode & difficulty buttons */
       mode1pBtn.addEventListener("click", () => setPlayerMode(false));
       mode2pBtn.addEventListener("click", () => setPlayerMode(true));
       diffEasyBtn.addEventListener("click", () => setDifficulty("easy"));
       diffMediumBtn.addEventListener("click", () => setDifficulty("medium"));
       diffHardBtn.addEventListener("click", () => setDifficulty("hard"));
 
+      /* Recompute fit when window or playfield container size changes */
       window.addEventListener("resize", updateFitScale);
       if (typeof ResizeObserver !== "undefined") {
         new ResizeObserver(updateFitScale).observe(viewportOuter);
       }
 
+      /* Boot: populate help, curse CSS vars, first serve; defer tick until layout known */
       updateHelpText();
       updateCurseVisuals();
       serve();
+      /* First paint: browser has laid out viewportOuter — then start simulation */
       requestAnimationFrame(() => {
         updateFitScale();
         last = performance.now();
         requestAnimationFrame(tick);
       });
-    })();
+    })(); /* end IIFE: no globals leaked except event handlers’ closures */
   </script>
 </body>
 </html>
